@@ -112,6 +112,24 @@ public class SslSampleConfigs {
   }
 
   /**
+   * Uses shared secrets for TLS
+   */
+  public static ConfigProvider createDefaultConfigProviderForSharedSecretTlsInRpcNamespaceWithSecret(String secret) {
+    Map<String, String> confMap = new HashMap<String, String>();
+    confMap.put("spark.ssl.rpc.enabled", "true");
+    confMap.put("spark.ssl.rpc.openSslEnabled", "false");
+    confMap.put("spark.ssl.rpc.deriveTlsKeyFromSharedSecret", secret);
+    return new MapConfigProvider(confMap);
+  }
+
+  /**
+   * Uses shared secrets for TLS
+   */
+  public static ConfigProvider createDefaultConfigProviderForSharedSecretTlsInRpcNamespace() {
+    return createDefaultConfigProviderForSharedSecretTlsInRpcNamespaceWithSecret("SHAREDSECRET");
+  }
+
+  /**
    * Create ConfigProvider based on the method above
    */
   public static ConfigProvider createDefaultConfigProviderForRpcNamespaceWithAdditionalEntries(

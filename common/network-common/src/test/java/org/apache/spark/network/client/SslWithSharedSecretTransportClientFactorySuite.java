@@ -25,12 +25,13 @@ import org.apache.spark.network.server.RpcHandler;
 import org.apache.spark.network.util.TransportConf;
 import org.apache.spark.network.TransportContext;
 
-public class SslTransportClientFactorySuite extends TransportClientFactorySuite {
+public class SslWithSharedSecretTransportClientFactorySuite extends TransportClientFactorySuite {
 
   @BeforeEach
   public void setUp() {
     conf = new TransportConf(
-      "shuffle", SslSampleConfigs.createDefaultConfigProviderForRpcNamespace());
+            "shuffle",
+            SslSampleConfigs.createDefaultConfigProviderForSharedSecretTlsInRpcNamespace());
     RpcHandler rpcHandler = new NoOpRpcHandler();
     context = new TransportContext(conf, rpcHandler);
     server1 = context.createServer();

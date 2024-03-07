@@ -20,11 +20,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.GeneralSecurityException;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.UnrecoverableKeyException;
+import java.security.*;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -41,13 +37,18 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.io.Files;
 
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
+
+import org.bouncycastle.cert.CertIOException;
+import org.bouncycastle.operator.OperatorCreationException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,16 +69,24 @@ public class SSLFactory {
   private SslContext nettyClientSslContext;
   private SslContext nettyServerSslContext;
 
+  // If set, generate TLS keys at runtime and use a shared secret for authentication
+  // We will always use netty's TLS implementation if this is set, and ignore any other key/cert
+  // arguments.
+  private String sharedSecret;
+
   private KeyManager[] keyManagers;
   private TrustManager[] trustManagers;
   private String requestedProtocol;
   private String[] requestedCiphers;
 
   private SSLFactory(final Builder b) {
+    this.sharedSecret = b.sharedSeret;
     this.requestedProtocol = b.requestedProtocol;
     this.requestedCiphers = b.requestedCiphers;
     try {
-      if (b.certChain != null && b.privateKey != null) {
+      if (this.sharedSecret != null) {
+        initNettySslContexts(b);
+      } else if (b.certChain != null && b.privateKey != null) {
         initNettySslContexts(b);
       } else {
         initJdkSslContext(b);
@@ -98,17 +107,38 @@ public class SSLFactory {
   }
 
   private void initNettySslContexts(final Builder b)
-          throws SSLException {
-    nettyClientSslContext = SslContextBuilder
-      .forClient()
-      .sslProvider(getSslProvider(b))
-      .trustManager(b.certChain)
-      .build();
+          throws SSLException, NoSuchAlgorithmException, NoSuchProviderException, InvalidKeyException,
+          OperatorCreationException, CertIOException, CertificateException {
+    if (sharedSecret != null) {
+      logger.info("Using shared secret for SSL authentication");
+      // TODO: Cache this, we should only need to generate it once for each sharedSecret
+      KeypairAndCert keypairAndCert = SslUtils.generateKeypairAndCert(sharedSecret);
+      nettyClientSslContext = SslContextBuilder
+        .forClient()
+        .sslProvider(getSslProvider(b))
+        .keyManager(keypairAndCert.getKeypair().getPrivate(), null, new X509Certificate[]{keypairAndCert.getCert()})
+        .trustManager(sharedSecretTrustStoreManager(sharedSecret))
+        .build();
 
-    nettyServerSslContext = SslContextBuilder
-      .forServer(b.certChain, b.privateKey, b.privateKeyPassword)
-      .sslProvider(getSslProvider(b))
-      .build();
+      nettyServerSslContext = SslContextBuilder
+        .forServer(keypairAndCert.getKeypair().getPrivate(), null, new X509Certificate[]{keypairAndCert.getCert()})
+        .sslProvider(getSslProvider(b))
+        .trustManager(sharedSecretTrustStoreManager(sharedSecret))
+        .clientAuth(ClientAuth.REQUIRE)
+        .build();
+
+    } else {
+      nettyClientSslContext = SslContextBuilder
+        .forClient()
+        .sslProvider(getSslProvider(b))
+        .trustManager(b.certChain)
+        .build();
+
+      nettyServerSslContext = SslContextBuilder
+        .forServer(b.certChain, b.privateKey, b.privateKeyPassword)
+        .sslProvider(getSslProvider(b))
+        .build();
+    }
   }
 
   /**
@@ -143,6 +173,7 @@ public class SSLFactory {
       trustManagers = null;
     }
 
+    sharedSecret = null;
     keyManagers = null;
     jdkSslContext = null;
     nettyClientSslContext = null;
@@ -155,6 +186,7 @@ public class SSLFactory {
    * Builder class to construct instances of {@link SSLFactory} with specific options
    */
   public static class Builder {
+    private String sharedSeret;
     private String requestedProtocol;
     private String[] requestedCiphers;
     private File keyStore;
@@ -168,6 +200,17 @@ public class SSLFactory {
     private boolean trustStoreReloadingEnabled;
     private int trustStoreReloadIntervalMs;
     private boolean openSslEnabled;
+
+    /**
+     * Sets the shared secret
+     * TODO: Document better
+     * @param sharedSecret The shared secret
+     * @return The builder object
+     */
+    public Builder sharedSecret(String sharedSecret) {
+      this.sharedSeret = sharedSecret;
+      return this;
+    }
 
     /**
      * Sets the requested protocol, i.e., "TLSv1.2", "TLSv1.1", etc
@@ -307,7 +350,6 @@ public class SSLFactory {
 
   /**
    * Creates a new {@link SSLEngine}.
-   * Note that currently client auth is not supported
    *
    * @param isClient Whether the engine is used in a client context
    * @param allocator The {@link ByteBufAllocator to use}
@@ -316,7 +358,8 @@ public class SSLFactory {
   public SSLEngine createSSLEngine(boolean isClient, ByteBufAllocator allocator) {
     SSLEngine engine = createEngine(isClient, allocator);
     engine.setUseClientMode(isClient);
-    engine.setNeedClientAuth(false);
+    engine.setWantClientAuth(sharedSecret != null);
+    engine.setNeedClientAuth(sharedSecret != null);
     engine.setEnabledProtocols(enabledProtocols(engine, requestedProtocol));
     engine.setEnabledCipherSuites(enabledCipherSuites(engine, requestedCiphers));
     return engine;
@@ -340,23 +383,82 @@ public class SSLFactory {
     return engine;
   }
 
-  private static TrustManager[] credulousTrustStoreManagers() {
-    return new TrustManager[]{new X509TrustManager() {
+  private static X509TrustManager credulousTrustStoreManager() {
+    return new X509TrustManager() {
       @Override
       public void checkClientTrusted(X509Certificate[] x509Certificates, String s)
-        throws CertificateException {
+              throws CertificateException {
       }
 
       @Override
       public void checkServerTrusted(X509Certificate[] x509Certificates, String s)
-        throws CertificateException {
+              throws CertificateException {
       }
 
       @Override
       public X509Certificate[] getAcceptedIssuers() {
         return null;
       }
-    }};
+    };
+  }
+
+  private static TrustManager[] credulousTrustStoreManagers() {
+    return new TrustManager[]{credulousTrustStoreManager()};
+  }
+
+  // Counts of the number of times clients/servers were rejected due to missing or invalid certs.
+  // Mostly used for testing
+  private static int clientCertRejectedCount = 0;
+  private static int serverCertRejectedCount = 0;
+
+  @VisibleForTesting
+  public static int getClientCertRejectedCount() {
+    return clientCertRejectedCount;
+  }
+
+  @VisibleForTesting
+  public static int getServerCertRejectedCount() {
+    return serverCertRejectedCount;
+  }
+
+  @VisibleForTesting
+  public static void resetCertRejectedCounts() {
+    clientCertRejectedCount = 0;
+    serverCertRejectedCount = 0;
+  }
+
+  private static X509TrustManager sharedSecretTrustStoreManager(String sharedSecret) {
+    return new X509TrustManager() {
+      @Override
+      public void checkClientTrusted(X509Certificate[] x509Certificates, String s)
+              throws CertificateException {
+        for (X509Certificate cert : x509Certificates) {
+          if (SslUtils.verifySinglePeerCert(sharedSecret, cert)) {
+            return;
+          }
+        }
+        clientCertRejectedCount++;
+        throw new CertificateException("Couldn't verify that the client had the shared secret");
+      }
+
+      @Override
+      public void checkServerTrusted(X509Certificate[] x509Certificates, String s)
+              throws CertificateException {
+        for (X509Certificate cert : x509Certificates) {
+          if (SslUtils.verifySinglePeerCert(sharedSecret, cert)) {
+            return;
+          }
+        }
+        serverCertRejectedCount++;
+        throw new CertificateException("Couldn't verify that the server had the shared secret");
+      }
+
+      @Override
+      public X509Certificate[] getAcceptedIssuers() {
+        // Allow self-signed certificates.
+        return new X509Certificate[0];
+      }
+    };
   }
 
   private static TrustManager[] trustStoreManagers(

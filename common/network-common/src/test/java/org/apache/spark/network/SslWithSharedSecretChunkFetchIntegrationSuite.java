@@ -14,26 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.spark.network;
 
-package org.apache.spark.network.client;
+import org.junit.jupiter.api.BeforeAll;
 
-import org.junit.jupiter.api.BeforeEach;
-
-import org.apache.spark.network.ssl.SslSampleConfigs;
-import org.apache.spark.network.server.NoOpRpcHandler;
-import org.apache.spark.network.server.RpcHandler;
 import org.apache.spark.network.util.TransportConf;
-import org.apache.spark.network.TransportContext;
+import org.apache.spark.network.ssl.SslSampleConfigs;
 
-public class SslTransportClientFactorySuite extends TransportClientFactorySuite {
+public class SslWithSharedSecretChunkFetchIntegrationSuite extends ChunkFetchIntegrationSuite {
 
-  @BeforeEach
-  public void setUp() {
-    conf = new TransportConf(
-      "shuffle", SslSampleConfigs.createDefaultConfigProviderForRpcNamespace());
-    RpcHandler rpcHandler = new NoOpRpcHandler();
-    context = new TransportContext(conf, rpcHandler);
-    server1 = context.createServer();
-    server2 = context.createServer();
+  @BeforeAll
+  public static void setUp() throws Exception {
+    doSetUpWithConfig(new TransportConf(
+            "shuffle",
+            SslSampleConfigs.createDefaultConfigProviderForSharedSecretTlsInRpcNamespace()));
   }
 }

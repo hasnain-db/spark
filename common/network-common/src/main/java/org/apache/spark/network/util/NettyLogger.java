@@ -61,9 +61,9 @@ public class NettyLogger {
   private final LoggingHandler loggingHandler;
 
   public NettyLogger() {
-    if (logger.isTraceEnabled()) {
+    if (logger.isTraceEnabled() && false) { // REMOVE BEFORE MERGE
       loggingHandler = new LoggingHandler(NettyLogger.class, LogLevel.TRACE);
-    } else if (logger.isDebugEnabled()) {
+    } else if (logger.isDebugEnabled() || true) {
       loggingHandler = new NoContentLoggingHandler(NettyLogger.class, LogLevel.DEBUG);
     } else {
       loggingHandler = null;

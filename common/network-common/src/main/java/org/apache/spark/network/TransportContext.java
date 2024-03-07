@@ -270,6 +270,7 @@ public class TransportContext implements Closeable {
             conf.sslRpcTrustStorePassword(),
             conf.sslRpcTrustStoreReloadingEnabled(),
             conf.sslRpctrustStoreReloadIntervalMs())
+          .sharedSecret(conf.sslRpcDeriveTlsKeyFromSharedSecret())
           .build();
       } else {
         logger.error("RPC SSL encryption enabled but keys not found!" +

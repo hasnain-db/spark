@@ -387,6 +387,9 @@ public class TransportConf {
     if (!sslRpcEnabled()) {
       return false;
     }
+    if (sslRpcDeriveTlsKeyFromSharedSecret() != null) {
+      return true;
+    }
     if (sslRpcOpenSslEnabled()) {
       // OpenSSL requires both the privateKey and certChain
       File privateKey = sslRpcPrivateKey();
@@ -406,6 +409,19 @@ public class TransportConf {
       // It's fine for the trust store to be missing, we would default to trusting all.
       return true;
     }
+  }
+
+  /**
+   * If set, derive a TLS key based on the shared authentication secret and verify
+   * peers have the shared secret presented in the SAN
+   * TODO: Either:
+   *   - We keep this flag, in which case we need to propagate it via SSLOptions
+   *     and through env variables like existing shared secrets
+   *   - We remove this flag and use the existing shared secret, in which case we need
+   *     to figure out backwards compatibility concerns
+   */
+  public String sslRpcDeriveTlsKeyFromSharedSecret() {
+    return conf.get("spark.ssl.rpc.deriveTlsKeyFromSharedSecret", null);
   }
 
   /**
